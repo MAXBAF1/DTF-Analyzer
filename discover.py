@@ -9,25 +9,35 @@ import aiohttp
 from db import upsert_post
 
 SUBSITE_ID = 287
-FEED_URL = "https://api.dtf.ru/v2.1/subsite/{subsite_id}/entries?page=1&count={count}"
+FEED_URLS = [
+    "https://api.dtf.ru/v1.6/subsite/{subsite_id}/timeline/recent?count={count}",
+    "https://api.dtf.ru/v1.6/subsite/{subsite_id}/timeline/new?count={count}",
+    "https://api.dtf.ru/v2.1/subsite/{subsite_id}/entries?page=1&count={count}",
+]
+
+
+def _entry_payload(item: dict) -> dict:
+    return item.get("entry") or item.get("data") or item
 
 
 def _extract_author(item: dict) -> str:
-    author = item.get("author") or item.get("user") or {}
+    entry = _entry_payload(item)
+    author = entry.get("author") or entry.get("user") or item.get("author") or item.get("user") or {}
     return author.get("name") or author.get("nickname") or ""
 
 
 def normalize_feed_item(item: dict, position: int) -> dict:
-    post_id = item.get("id") or item.get("entry", {}).get("id")
-    title = item.get("title") or item.get("entry", {}).get("title") or "Без названия"
-    published_at = item.get("date") or item.get("entry", {}).get("date")
+    entry = _entry_payload(item)
+    post_id = entry.get("id") or item.get("id")
+    title = entry.get("title") or item.get("title") or "Без названия"
+    published_at = entry.get("date") or entry.get("created") or item.get("date") or item.get("created")
     return {
         "id": int(post_id),
         "title": title,
         "published_at": int(published_at),
         "author": _extract_author(item),
         "feed_position": position,
-        "url": item.get("url") or f"https://dtf.ru/indie/{post_id}",
+        "url": entry.get("url") or item.get("url") or f"https://dtf.ru/indie/{post_id}",
     }
 
 
@@ -37,9 +47,35 @@ async def fetch_json(session: aiohttp.ClientSession, url: str) -> dict:
         return await response.json()
 
 
+async def fetch_first_available(session: aiohttp.ClientSession, urls: list[str]) -> dict:
+    last_error: Exception | None = None
+    for url in urls:
+        try:
+            return await fetch_json(session, url)
+        except aiohttp.ClientResponseError as exc:
+            if exc.status not in {404, 410}:
+                raise
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No DTF feed endpoints configured")
+
+
+def extract_items(data: dict) -> list[dict]:
+    result = data.get("result", data)
+    if isinstance(result, list):
+        return result
+    for key in ("items", "entries", "timeline"):
+        value = result.get(key) if isinstance(result, dict) else None
+        if isinstance(value, list):
+            return value
+    return []
+
+
 async def discover_posts(conn, session: aiohttp.ClientSession, count: int = 20) -> list[int]:
-    data = await fetch_json(session, FEED_URL.format(subsite_id=SUBSITE_ID, count=count))
-    items = data.get("result", {}).get("items", [])
+    urls = [url.format(subsite_id=SUBSITE_ID, count=count) for url in FEED_URLS]
+    data = await fetch_first_available(session, urls)
+    items = extract_items(data)
     new_posts: list[int] = []
     now = int(time.time())
 

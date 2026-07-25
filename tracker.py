@@ -8,9 +8,12 @@ import time
 import aiohttp
 
 from db import insert_metric
-from discover import fetch_json
+from discover import fetch_first_available
 
-CONTENT_URL = "https://api.dtf.ru/v2.1/content/{post_id}"
+CONTENT_URLS = [
+    "https://api.dtf.ru/v1.6/entry/{post_id}",
+    "https://api.dtf.ru/v2.1/content/{post_id}",
+]
 CHECKPOINTS = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 360, 720, 1440]
 
 
@@ -24,14 +27,24 @@ def engagement_rate(likes: int, comments: int, views: int) -> float:
     return 0.0 if views <= 0 else (likes + comments) / views
 
 
+def _counter_value(source: dict, *names: str) -> int:
+    for name in names:
+        value = source.get(name)
+        if value is not None:
+            return int(value)
+    return 0
+
+
 async def fetch_post_metrics(session: aiohttp.ClientSession, post_id: int) -> dict:
-    data = await fetch_json(session, CONTENT_URL.format(post_id=post_id))
-    result = data.get("result", {})
-    counters = result.get("counters", {})
+    urls = [url.format(post_id=post_id) for url in CONTENT_URLS]
+    data = await fetch_first_available(session, urls)
+    result = data.get("result", data)
+    entry = result.get("entry") or result.get("data") or result
+    counters = entry.get("counters", {})
     return {
-        "views": int(counters.get("views") or result.get("views") or 0),
-        "likes": int(counters.get("likes") or result.get("likes") or 0),
-        "comments": int(result.get("comments_count") or counters.get("comments") or 0),
+        "views": _counter_value(counters, "views", "hits", "hitsCount") or _counter_value(entry, "views", "hits", "hitsCount"),
+        "likes": _counter_value(counters, "likes", "favorites") or _counter_value(entry, "likes", "favorites"),
+        "comments": _counter_value(entry, "comments_count", "commentsCount") or _counter_value(counters, "comments", "comments_count", "commentsCount"),
     }
 
 
