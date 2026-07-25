@@ -8,12 +8,9 @@ import time
 import aiohttp
 
 from db import insert_metric
-from discover import fetch_first_available
+from discover import fetch_json
 
-CONTENT_URLS = [
-    "https://api.dtf.ru/v1.6/entry/{post_id}",
-    "https://api.dtf.ru/v2.1/content/{post_id}",
-]
+CONTENT_URL = "https://api.dtf.ru/v2.10/content?id={post_id}&markdown=false"
 CHECKPOINTS = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 360, 720, 1440]
 
 
@@ -35,17 +32,26 @@ def _counter_value(source: dict, *names: str) -> int:
     return 0
 
 
-async def fetch_post_metrics(session: aiohttp.ClientSession, post_id: int) -> dict:
-    urls = [url.format(post_id=post_id) for url in CONTENT_URLS]
-    data = await fetch_first_available(session, urls)
-    result = data.get("result", data)
-    entry = result.get("entry") or result.get("data") or result
+def _metrics_from_entry(entry: dict) -> dict:
     counters = entry.get("counters", {})
     return {
-        "views": _counter_value(counters, "views", "hits", "hitsCount") or _counter_value(entry, "views", "hits", "hitsCount"),
-        "likes": _counter_value(counters, "likes", "favorites") or _counter_value(entry, "likes", "favorites"),
-        "comments": _counter_value(entry, "comments_count", "commentsCount") or _counter_value(counters, "comments", "comments_count", "commentsCount"),
+        "views": _counter_value(counters, "views"),
+        "likes": _counter_value(counters, "likes", "favorites"),
+        "comments": _counter_value(counters, "comments", "comments_count", "commentsCount"),
+        "favorites": _counter_value(counters, "favorites"),
+        "reactions": _counter_value(counters, "reactions"),
+        "reads": _counter_value(counters, "reads"),
+        "hits": _counter_value(counters, "hits"),
+        "timespent": _counter_value(counters, "timespent"),
+        "online": _counter_value(counters, "online"),
     }
+
+
+async def fetch_post_metrics(session: aiohttp.ClientSession, post_id: int) -> dict:
+    data = await fetch_json(session, CONTENT_URL.format(post_id=post_id))
+    result = data.get("result", data)
+    entry = result.get("entry") or result.get("data") or result
+    return _metrics_from_entry(entry)
 
 
 def build_metric(conn, post_id: int, raw: dict, checkpoint_minute: float, now: int) -> dict:
@@ -92,6 +98,12 @@ def build_metric(conn, post_id: int, raw: dict, checkpoint_minute: float, now: i
         "views": raw["views"],
         "likes": raw["likes"],
         "comments": raw["comments"],
+        "favorites": raw.get("favorites", 0),
+        "reactions": raw.get("reactions", 0),
+        "reads": raw.get("reads", 0),
+        "hits": raw.get("hits", 0),
+        "timespent": raw.get("timespent", 0),
+        "online": raw.get("online", 0),
         "feed_position": feed_position_row["last_feed_position"] if feed_position_row else None,
         "views_per_minute": total_velocity,
         "views_last_5m": delta_views,

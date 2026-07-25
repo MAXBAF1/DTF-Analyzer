@@ -8,11 +8,13 @@ import aiohttp
 
 from db import upsert_post
 
-SUBSITE_ID = 287
+SUBSITE_ID = 64960
 FEED_URLS = [
-    "https://api.dtf.ru/v1.6/subsite/{subsite_id}/timeline/recent?count={count}",
-    "https://api.dtf.ru/v1.6/subsite/{subsite_id}/timeline/new?count={count}",
-    "https://api.dtf.ru/v2.1/subsite/{subsite_id}/entries?page=1&count={count}",
+    "https://api.dtf.ru/v2.10/timeline"
+    "?markdown=false"
+    "&sorting=hotness"
+    "&subsitesIds={subsite_id}"
+    "&count={count}",
 ]
 
 
@@ -31,11 +33,15 @@ def normalize_feed_item(item: dict, position: int) -> dict:
     post_id = entry.get("id") or item.get("id")
     title = entry.get("title") or item.get("title") or "Без названия"
     published_at = entry.get("date") or entry.get("created") or item.get("date") or item.get("created")
+    subsite = entry.get("subsite") or item.get("subsite") or {}
     return {
         "id": int(post_id),
         "title": title,
         "published_at": int(published_at),
         "author": _extract_author(item),
+        "date_modified": entry.get("dateModified") or item.get("dateModified"),
+        "subsite_id": subsite.get("id"),
+        "subsite_name": subsite.get("name") or subsite.get("title") or "",
         "feed_position": position,
         "url": entry.get("url") or item.get("url") or f"https://dtf.ru/indie/{post_id}",
     }
@@ -53,7 +59,7 @@ async def fetch_first_available(session: aiohttp.ClientSession, urls: list[str])
         try:
             return await fetch_json(session, url)
         except aiohttp.ClientResponseError as exc:
-            if exc.status not in {404, 410}:
+            if exc.status not in {404, 405, 410}:
                 raise
             last_error = exc
     if last_error is not None:
