@@ -1,20 +1,29 @@
-CREATE TABLE posts (
+CREATE TABLE IF NOT EXISTS posts (
     id INTEGER PRIMARY KEY,
     title TEXT NOT NULL,
     published_at INTEGER NOT NULL,
     author TEXT DEFAULT '',
     first_seen_at INTEGER NOT NULL,
     last_feed_position INTEGER,
-    url TEXT DEFAULT ''
+    url TEXT DEFAULT '',
+    date_modified INTEGER,
+    subsite_id INTEGER,
+    subsite_name TEXT DEFAULT ''
 );
 
-CREATE TABLE metrics (
+CREATE TABLE IF NOT EXISTS metrics (
     post_id INTEGER NOT NULL,
     ts INTEGER NOT NULL,
     minutes_since_publish REAL NOT NULL,
     views INTEGER NOT NULL,
     likes INTEGER NOT NULL,
     comments INTEGER NOT NULL,
+    favorites INTEGER DEFAULT 0,
+    reactions INTEGER DEFAULT 0,
+    reads INTEGER DEFAULT 0,
+    hits INTEGER DEFAULT 0,
+    timespent INTEGER DEFAULT 0,
+    online INTEGER DEFAULT 0,
     feed_position INTEGER,
     views_per_minute REAL,
     views_last_5m INTEGER,
@@ -24,3 +33,8 @@ CREATE TABLE metrics (
     PRIMARY KEY (post_id, ts),
     FOREIGN KEY (post_id) REFERENCES posts(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_metrics_post_minutes
+    ON metrics(post_id, minutes_since_publish);
+CREATE INDEX IF NOT EXISTS idx_posts_published_at
+    ON posts(published_at);

@@ -15,6 +15,9 @@ from db import DEFAULT_DB, active_post_ids, connect
 from discover import discover_posts
 from tracker import CHECKPOINTS, track_post
 
+# TODO(telegram): periodically send the live-window recommendation to Telegram
+# after recent_competition grows into the full competition detector.
+
 
 def _cleanup_tasks(tasks: dict[int, asyncio.Task]) -> None:
     for post_id, task in list(tasks.items()):

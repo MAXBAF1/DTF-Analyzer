@@ -12,6 +12,8 @@ from discover import fetch_json
 
 CONTENT_URL = "https://api.dtf.ru/v2.10/content?id={post_id}&markdown=false"
 CHECKPOINTS = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 360, 720, 1440]
+# TODO(early-dynamics): consider sub-minute checkpoints (15s/30s/45s) or a
+# separate early-tracking mode to make the first minute curve visible.
 
 
 def growth_rate(prev_views: int, curr_views: int, delta_minutes: float) -> float:

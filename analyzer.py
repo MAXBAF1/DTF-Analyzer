@@ -31,6 +31,8 @@ def best_publish_windows(conn: sqlite3.Connection, checkpoint: int = 60, limit: 
     ).fetchall()
 
 
+# TODO(live-window): expand this into a 30-minute detector that combines
+# views_10m_last_20_posts, post frequency, velocity, ER, and outlier pressure.
 def recent_competition(conn: sqlite3.Connection, sample_size: int = 20) -> dict:
     rows = conn.execute(
         """

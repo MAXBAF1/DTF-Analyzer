@@ -78,6 +78,8 @@ def extract_items(data: dict) -> list[dict]:
     return []
 
 
+# TODO(feed-position-history): store every feed snapshot in a separate table so
+# analytics can correlate views with #1/#3/#10 placement, not only last position.
 async def discover_posts(conn, session: aiohttp.ClientSession, count: int = 20) -> list[int]:
     urls = [url.format(subsite_id=SUBSITE_ID, count=count) for url in FEED_URLS]
     data = await fetch_first_available(session, urls)
