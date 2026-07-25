@@ -7,14 +7,31 @@ import time
 
 import aiohttp
 
-from db import insert_metric
-from discover import fetch_first_available
+from db import insert_metric, nearest_feed_position
+from discover import fetch_json
 
-CONTENT_URLS = [
-    "https://api.dtf.ru/v1.6/entry/{post_id}",
-    "https://api.dtf.ru/v2.1/content/{post_id}",
+CONTENT_URL = "https://api.dtf.ru/v2.10/content?id={post_id}&markdown=false"
+MAX_CHECKPOINT_LAG_SECONDS = 30
+CHECKPOINTS = [
+    0.25,
+    0.5,
+    0.75,
+    1,
+    2,
+    5,
+    10,
+    15,
+    20,
+    30,
+    45,
+    60,
+    90,
+    120,
+    180,
+    360,
+    720,
+    1440,
 ]
-CHECKPOINTS = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 360, 720, 1440]
 
 
 def growth_rate(prev_views: int, curr_views: int, delta_minutes: float) -> float:
@@ -27,6 +44,12 @@ def engagement_rate(likes: int, comments: int, views: int) -> float:
     return 0.0 if views <= 0 else (likes + comments) / views
 
 
+def checkpoint_label(minutes: float) -> str:
+    if minutes < 1:
+        return f"+{int(minutes * 60)}s"
+    return f"+{minutes:g}m"
+
+
 def _counter_value(source: dict, *names: str) -> int:
     for name in names:
         value = source.get(name)
@@ -35,17 +58,26 @@ def _counter_value(source: dict, *names: str) -> int:
     return 0
 
 
-async def fetch_post_metrics(session: aiohttp.ClientSession, post_id: int) -> dict:
-    urls = [url.format(post_id=post_id) for url in CONTENT_URLS]
-    data = await fetch_first_available(session, urls)
-    result = data.get("result", data)
-    entry = result.get("entry") or result.get("data") or result
+def _metrics_from_entry(entry: dict) -> dict:
     counters = entry.get("counters", {})
     return {
-        "views": _counter_value(counters, "views", "hits", "hitsCount") or _counter_value(entry, "views", "hits", "hitsCount"),
-        "likes": _counter_value(counters, "likes", "favorites") or _counter_value(entry, "likes", "favorites"),
-        "comments": _counter_value(entry, "comments_count", "commentsCount") or _counter_value(counters, "comments", "comments_count", "commentsCount"),
+        "views": _counter_value(counters, "views"),
+        "likes": _counter_value(counters, "likes", "favorites"),
+        "comments": _counter_value(counters, "comments", "comments_count", "commentsCount"),
+        "favorites": _counter_value(counters, "favorites"),
+        "reactions": _counter_value(counters, "reactions"),
+        "reads": _counter_value(counters, "reads"),
+        "hits": _counter_value(counters, "hits"),
+        "timespent": _counter_value(counters, "timespent"),
+        "online": _counter_value(counters, "online"),
     }
+
+
+async def fetch_post_metrics(session: aiohttp.ClientSession, post_id: int) -> dict:
+    data = await fetch_json(session, CONTENT_URL.format(post_id=post_id))
+    result = data.get("result", data)
+    entry = result.get("entry") or result.get("data") or result
+    return _metrics_from_entry(entry)
 
 
 def build_metric(conn, post_id: int, raw: dict, checkpoint_minute: float, now: int) -> dict:
@@ -81,9 +113,12 @@ def build_metric(conn, post_id: int, raw: dict, checkpoint_minute: float, now: i
     previous_velocity = previous["velocity_5m"] if previous else None
     acceleration = None if previous_velocity is None else velocity_5m - previous_velocity
 
-    feed_position_row = conn.execute(
-        "SELECT last_feed_position FROM posts WHERE id=?", (post_id,)
-    ).fetchone()
+    feed_position = nearest_feed_position(conn, post_id, now)
+    if feed_position is None:
+        feed_position_row = conn.execute(
+            "SELECT last_feed_position FROM posts WHERE id=?", (post_id,)
+        ).fetchone()
+        feed_position = feed_position_row["last_feed_position"] if feed_position_row else None
 
     return {
         "post_id": post_id,
@@ -92,7 +127,13 @@ def build_metric(conn, post_id: int, raw: dict, checkpoint_minute: float, now: i
         "views": raw["views"],
         "likes": raw["likes"],
         "comments": raw["comments"],
-        "feed_position": feed_position_row["last_feed_position"] if feed_position_row else None,
+        "favorites": raw.get("favorites", 0),
+        "reactions": raw.get("reactions", 0),
+        "reads": raw.get("reads", 0),
+        "hits": raw.get("hits", 0),
+        "timespent": raw.get("timespent", 0),
+        "online": raw.get("online", 0),
+        "feed_position": feed_position,
         "views_per_minute": total_velocity,
         "views_last_5m": delta_views,
         "velocity_5m": velocity_5m,
@@ -116,6 +157,8 @@ async def track_post(conn, session: aiohttp.ClientSession, post_id: int) -> None
             continue
 
         wait = row["published_at"] + minute * 60 - time.time()
+        if wait < -MAX_CHECKPOINT_LAG_SECONDS:
+            continue
         if wait > 0:
             await asyncio.sleep(wait)
 
@@ -124,10 +167,10 @@ async def track_post(conn, session: aiohttp.ClientSession, post_id: int) -> None
             metric = build_metric(conn, post_id, raw, minute, int(time.time()))
             insert_metric(conn, metric)
             print(
-                f'[{post_id}] +{minute:>4}m | {raw["views"]:>6} views | '
+                f'[{post_id}] {checkpoint_label(minute):>5} | {raw["views"]:>6} views | '
                 f'{metric["velocity_5m"]:>7.1f} v/m | Δ5m {metric["views_last_5m"]:>5} | '
                 f'accel {metric["acceleration"] if metric["acceleration"] is not None else 0:>7.1f} | '
                 f'ER {metric["engagement_rate"]:.2%}'
             )
         except Exception as exc:
-            print(f'[ERR] {post_id} +{minute}m: {exc}')
+            print(f'[ERR] {post_id} {checkpoint_label(minute)}: {exc}')

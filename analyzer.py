@@ -9,7 +9,7 @@ from statistics import mean
 from db import DEFAULT_DB, connect
 
 
-def best_publish_windows(conn: sqlite3.Connection, checkpoint: int = 60, limit: int = 20) -> list[sqlite3.Row]:
+def best_publish_windows(conn: sqlite3.Connection, checkpoint: float = 60, limit: int = 20) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT
@@ -31,6 +31,8 @@ def best_publish_windows(conn: sqlite3.Connection, checkpoint: int = 60, limit: 
     ).fetchall()
 
 
+# TODO(live-window): expand this into a 30-minute detector that combines
+# views_10m_last_20_posts, post frequency, velocity, ER, and outlier pressure.
 def recent_competition(conn: sqlite3.Connection, sample_size: int = 20) -> dict:
     rows = conn.execute(
         """
@@ -59,7 +61,7 @@ def recent_competition(conn: sqlite3.Connection, sample_size: int = 20) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze collected DTF Indie metrics")
     parser.add_argument("--db", default=DEFAULT_DB)
-    parser.add_argument("--checkpoint", type=int, default=60)
+    parser.add_argument("--checkpoint", type=float, default=60)
     args = parser.parse_args()
 
     conn = connect(args.db)
