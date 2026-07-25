@@ -11,6 +11,16 @@ CREATE TABLE IF NOT EXISTS posts (
     subsite_name TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS feed_positions (
+    post_id INTEGER NOT NULL,
+    ts INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    feed_page INTEGER DEFAULT 1,
+    snapshot_id INTEGER NOT NULL,
+    PRIMARY KEY (post_id, ts),
+    FOREIGN KEY (post_id) REFERENCES posts(id)
+);
+
 CREATE TABLE IF NOT EXISTS metrics (
     post_id INTEGER NOT NULL,
     ts INTEGER NOT NULL,
@@ -34,6 +44,10 @@ CREATE TABLE IF NOT EXISTS metrics (
     FOREIGN KEY (post_id) REFERENCES posts(id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_feed_positions_post_ts
+    ON feed_positions(post_id, ts);
+CREATE INDEX IF NOT EXISTS idx_feed_positions_snapshot
+    ON feed_positions(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_post_minutes
     ON metrics(post_id, minutes_since_publish);
 CREATE INDEX IF NOT EXISTS idx_posts_published_at

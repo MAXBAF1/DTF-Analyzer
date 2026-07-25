@@ -7,7 +7,7 @@ import time
 
 import aiohttp
 
-from db import insert_metric
+from db import insert_metric, nearest_feed_position
 from discover import fetch_json
 
 CONTENT_URL = "https://api.dtf.ru/v2.10/content?id={post_id}&markdown=false"
@@ -113,9 +113,12 @@ def build_metric(conn, post_id: int, raw: dict, checkpoint_minute: float, now: i
     previous_velocity = previous["velocity_5m"] if previous else None
     acceleration = None if previous_velocity is None else velocity_5m - previous_velocity
 
-    feed_position_row = conn.execute(
-        "SELECT last_feed_position FROM posts WHERE id=?", (post_id,)
-    ).fetchone()
+    feed_position = nearest_feed_position(conn, post_id, now)
+    if feed_position is None:
+        feed_position_row = conn.execute(
+            "SELECT last_feed_position FROM posts WHERE id=?", (post_id,)
+        ).fetchone()
+        feed_position = feed_position_row["last_feed_position"] if feed_position_row else None
 
     return {
         "post_id": post_id,
@@ -130,7 +133,7 @@ def build_metric(conn, post_id: int, raw: dict, checkpoint_minute: float, now: i
         "hits": raw.get("hits", 0),
         "timespent": raw.get("timespent", 0),
         "online": raw.get("online", 0),
-        "feed_position": feed_position_row["last_feed_position"] if feed_position_row else None,
+        "feed_position": feed_position,
         "views_per_minute": total_velocity,
         "views_last_5m": delta_views,
         "velocity_5m": velocity_5m,

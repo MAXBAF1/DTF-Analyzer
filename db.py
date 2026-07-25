@@ -22,6 +22,16 @@ CREATE TABLE IF NOT EXISTS posts (
     subsite_name TEXT DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS feed_positions (
+    post_id INTEGER NOT NULL,
+    ts INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    feed_page INTEGER DEFAULT 1,
+    snapshot_id INTEGER NOT NULL,
+    PRIMARY KEY (post_id, ts),
+    FOREIGN KEY (post_id) REFERENCES posts(id)
+);
+
 CREATE TABLE IF NOT EXISTS metrics (
     post_id INTEGER NOT NULL,
     ts INTEGER NOT NULL,
@@ -45,6 +55,10 @@ CREATE TABLE IF NOT EXISTS metrics (
     FOREIGN KEY (post_id) REFERENCES posts(id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_feed_positions_post_ts
+    ON feed_positions(post_id, ts);
+CREATE INDEX IF NOT EXISTS idx_feed_positions_snapshot
+    ON feed_positions(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_post_minutes
     ON metrics(post_id, minutes_since_publish);
 CREATE INDEX IF NOT EXISTS idx_posts_published_at
@@ -64,6 +78,7 @@ def connect(db_path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _migrate_legacy_schema(conn)
+    _migrate_feed_positions(conn)
     conn.commit()
 
 
@@ -105,6 +120,28 @@ def _migrate_legacy_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE metrics ADD COLUMN {name} {ddl}")
 
 
+def _migrate_feed_positions(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feed_positions (
+            post_id INTEGER NOT NULL,
+            ts INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            feed_page INTEGER DEFAULT 1,
+            snapshot_id INTEGER NOT NULL,
+            PRIMARY KEY (post_id, ts),
+            FOREIGN KEY (post_id) REFERENCES posts(id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feed_positions_post_ts ON feed_positions(post_id, ts)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feed_positions_snapshot ON feed_positions(snapshot_id)"
+    )
+
+
 def upsert_post(conn: sqlite3.Connection, post: dict, now: int) -> bool:
     exists = conn.execute("SELECT 1 FROM posts WHERE id=?", (post["id"],)).fetchone()
     conn.execute(
@@ -133,6 +170,23 @@ def upsert_post(conn: sqlite3.Connection, post: dict, now: int) -> bool:
     return exists is None
 
 
+def insert_feed_position(
+    conn: sqlite3.Connection,
+    post_id: int,
+    ts: int,
+    position: int,
+    feed_page: int = 1,
+    snapshot_id: int | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO feed_positions (post_id, ts, position, feed_page, snapshot_id)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (post_id, ts, position, feed_page, snapshot_id if snapshot_id is not None else ts),
+    )
+
+
 def insert_metric(conn: sqlite3.Connection, metric: dict) -> None:
     conn.execute(
         """
@@ -152,6 +206,19 @@ def insert_metric(conn: sqlite3.Connection, metric: dict) -> None:
         ),
     )
     conn.commit()
+
+
+def nearest_feed_position(conn: sqlite3.Connection, post_id: int, ts: int) -> int | None:
+    row = conn.execute(
+        """
+        SELECT position FROM feed_positions
+        WHERE post_id=? AND ts <= ?
+        ORDER BY ts DESC
+        LIMIT 1
+        """,
+        (post_id, ts),
+    ).fetchone()
+    return row["position"] if row else None
 
 
 def active_post_ids(

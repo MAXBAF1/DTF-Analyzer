@@ -6,7 +6,7 @@ import time
 
 import aiohttp
 
-from db import upsert_post
+from db import insert_feed_position, upsert_post
 
 SUBSITE_ID = 64960
 FEED_URLS = [
@@ -78,19 +78,20 @@ def extract_items(data: dict) -> list[dict]:
     return []
 
 
-# TODO(feed-position-history): store every feed snapshot in a separate table so
-# analytics can correlate views with #1/#3/#10 placement, not only last position.
 async def discover_posts(conn, session: aiohttp.ClientSession, count: int = 20) -> list[int]:
     urls = [url.format(subsite_id=SUBSITE_ID, count=count) for url in FEED_URLS]
     data = await fetch_first_available(session, urls)
     items = extract_items(data)
     new_posts: list[int] = []
     now = int(time.time())
+    snapshot_id = now
 
     for position, item in enumerate(items, start=1):
         post = normalize_feed_item(item, position)
         if upsert_post(conn, post, now):
             print(f'[NEW] #{position} {post["id"]} | {post["title"]}')
             new_posts.append(post["id"])
+        insert_feed_position(conn, post["id"], now, position, snapshot_id=snapshot_id)
 
+    conn.commit()
     return new_posts
