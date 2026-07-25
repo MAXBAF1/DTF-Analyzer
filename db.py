@@ -16,7 +16,20 @@ CREATE TABLE IF NOT EXISTS posts (
     author TEXT DEFAULT '',
     first_seen_at INTEGER NOT NULL,
     last_feed_position INTEGER,
-    url TEXT DEFAULT ''
+    url TEXT DEFAULT '',
+    date_modified INTEGER,
+    subsite_id INTEGER,
+    subsite_name TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS feed_positions (
+    post_id INTEGER NOT NULL,
+    ts INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    feed_page INTEGER DEFAULT 1,
+    snapshot_id INTEGER NOT NULL,
+    PRIMARY KEY (post_id, ts),
+    FOREIGN KEY (post_id) REFERENCES posts(id)
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -26,6 +39,12 @@ CREATE TABLE IF NOT EXISTS metrics (
     views INTEGER NOT NULL,
     likes INTEGER NOT NULL,
     comments INTEGER NOT NULL,
+    favorites INTEGER DEFAULT 0,
+    reactions INTEGER DEFAULT 0,
+    reads INTEGER DEFAULT 0,
+    hits INTEGER DEFAULT 0,
+    timespent INTEGER DEFAULT 0,
+    online INTEGER DEFAULT 0,
     feed_position INTEGER,
     views_per_minute REAL,
     views_last_5m INTEGER,
@@ -36,6 +55,10 @@ CREATE TABLE IF NOT EXISTS metrics (
     FOREIGN KEY (post_id) REFERENCES posts(id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_feed_positions_post_ts
+    ON feed_positions(post_id, ts);
+CREATE INDEX IF NOT EXISTS idx_feed_positions_snapshot
+    ON feed_positions(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_post_minutes
     ON metrics(post_id, minutes_since_publish);
 CREATE INDEX IF NOT EXISTS idx_posts_published_at
@@ -55,6 +78,7 @@ def connect(db_path: str | Path = DEFAULT_DB) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _migrate_legacy_schema(conn)
+    _migrate_feed_positions(conn)
     conn.commit()
 
 
@@ -66,6 +90,9 @@ def _migrate_legacy_schema(conn: sqlite3.Connection) -> None:
         "first_seen_at": "INTEGER NOT NULL DEFAULT 0",
         "last_feed_position": "INTEGER",
         "url": "TEXT DEFAULT ''",
+        "date_modified": "INTEGER",
+        "subsite_id": "INTEGER",
+        "subsite_name": "TEXT DEFAULT ''",
     }
     for name, ddl in post_columns.items():
         if name not in columns:
@@ -75,6 +102,12 @@ def _migrate_legacy_schema(conn: sqlite3.Connection) -> None:
         row["name"] for row in conn.execute("PRAGMA table_info(metrics)").fetchall()
     }
     metric_columns = {
+        "favorites": "INTEGER DEFAULT 0",
+        "reactions": "INTEGER DEFAULT 0",
+        "reads": "INTEGER DEFAULT 0",
+        "hits": "INTEGER DEFAULT 0",
+        "timespent": "INTEGER DEFAULT 0",
+        "online": "INTEGER DEFAULT 0",
         "feed_position": "INTEGER",
         "views_per_minute": "REAL",
         "views_last_5m": "INTEGER",
@@ -87,38 +120,87 @@ def _migrate_legacy_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE metrics ADD COLUMN {name} {ddl}")
 
 
+def _migrate_feed_positions(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feed_positions (
+            post_id INTEGER NOT NULL,
+            ts INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            feed_page INTEGER DEFAULT 1,
+            snapshot_id INTEGER NOT NULL,
+            PRIMARY KEY (post_id, ts),
+            FOREIGN KEY (post_id) REFERENCES posts(id)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feed_positions_post_ts ON feed_positions(post_id, ts)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feed_positions_snapshot ON feed_positions(snapshot_id)"
+    )
+
+
 def upsert_post(conn: sqlite3.Connection, post: dict, now: int) -> bool:
     exists = conn.execute("SELECT 1 FROM posts WHERE id=?", (post["id"],)).fetchone()
     conn.execute(
         """
-        INSERT INTO posts (id, title, published_at, author, first_seen_at, last_feed_position, url)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO posts (
+            id, title, published_at, author, first_seen_at, last_feed_position, url,
+            date_modified, subsite_id, subsite_name
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             title=excluded.title,
             author=excluded.author,
             last_feed_position=excluded.last_feed_position,
-            url=excluded.url
+            url=excluded.url,
+            date_modified=excluded.date_modified,
+            subsite_id=excluded.subsite_id,
+            subsite_name=excluded.subsite_name
         """,
         (
             post["id"], post["title"], post["published_at"], post.get("author", ""),
             now, post.get("feed_position"), post.get("url", ""),
+            post.get("date_modified"), post.get("subsite_id"), post.get("subsite_name", ""),
         ),
     )
     conn.commit()
     return exists is None
 
 
+def insert_feed_position(
+    conn: sqlite3.Connection,
+    post_id: int,
+    ts: int,
+    position: int,
+    feed_page: int = 1,
+    snapshot_id: int | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO feed_positions (post_id, ts, position, feed_page, snapshot_id)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (post_id, ts, position, feed_page, snapshot_id if snapshot_id is not None else ts),
+    )
+
+
 def insert_metric(conn: sqlite3.Connection, metric: dict) -> None:
     conn.execute(
         """
         INSERT OR REPLACE INTO metrics (
-            post_id, ts, minutes_since_publish, views, likes, comments, feed_position,
-            views_per_minute, views_last_5m, velocity_5m, acceleration, engagement_rate
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            post_id, ts, minutes_since_publish, views, likes, comments, favorites,
+            reactions, reads, hits, timespent, online, feed_position, views_per_minute,
+            views_last_5m, velocity_5m, acceleration, engagement_rate
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             metric["post_id"], metric["ts"], metric["minutes_since_publish"],
-            metric["views"], metric["likes"], metric["comments"], metric.get("feed_position"),
+            metric["views"], metric["likes"], metric["comments"], metric.get("favorites", 0),
+            metric.get("reactions", 0), metric.get("reads", 0), metric.get("hits", 0),
+            metric.get("timespent", 0), metric.get("online", 0), metric.get("feed_position"),
             metric.get("views_per_minute"), metric.get("views_last_5m"),
             metric.get("velocity_5m"), metric.get("acceleration"), metric.get("engagement_rate"),
         ),
@@ -126,8 +208,28 @@ def insert_metric(conn: sqlite3.Connection, metric: dict) -> None:
     conn.commit()
 
 
-def active_post_ids(conn: sqlite3.Connection, now: int, checkpoints: Iterable[int]) -> list[int]:
+def nearest_feed_position(conn: sqlite3.Connection, post_id: int, ts: int) -> int | None:
+    row = conn.execute(
+        """
+        SELECT position FROM feed_positions
+        WHERE post_id=? AND ts <= ?
+        ORDER BY ts DESC
+        LIMIT 1
+        """,
+        (post_id, ts),
+    ).fetchone()
+    return row["position"] if row else None
+
+
+def active_post_ids(
+    conn: sqlite3.Connection,
+    now: int,
+    checkpoints: Iterable[float],
+    max_track_age_minutes: int | None = None,
+) -> list[int]:
     max_age = max(checkpoints) * 60
+    if max_track_age_minutes is not None:
+        max_age = min(max_age, max_track_age_minutes * 60)
     rows = conn.execute(
         "SELECT id FROM posts WHERE published_at + ? >= ?",
         (max_age, now),
