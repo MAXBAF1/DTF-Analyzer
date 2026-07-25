@@ -11,9 +11,27 @@ from db import insert_metric
 from discover import fetch_json
 
 CONTENT_URL = "https://api.dtf.ru/v2.10/content?id={post_id}&markdown=false"
-CHECKPOINTS = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 360, 720, 1440]
-# TODO(early-dynamics): consider sub-minute checkpoints (15s/30s/45s) or a
-# separate early-tracking mode to make the first minute curve visible.
+MAX_CHECKPOINT_LAG_SECONDS = 30
+CHECKPOINTS = [
+    0.25,
+    0.5,
+    0.75,
+    1,
+    2,
+    5,
+    10,
+    15,
+    20,
+    30,
+    45,
+    60,
+    90,
+    120,
+    180,
+    360,
+    720,
+    1440,
+]
 
 
 def growth_rate(prev_views: int, curr_views: int, delta_minutes: float) -> float:
@@ -24,6 +42,12 @@ def growth_rate(prev_views: int, curr_views: int, delta_minutes: float) -> float
 
 def engagement_rate(likes: int, comments: int, views: int) -> float:
     return 0.0 if views <= 0 else (likes + comments) / views
+
+
+def checkpoint_label(minutes: float) -> str:
+    if minutes < 1:
+        return f"+{int(minutes * 60)}s"
+    return f"+{minutes:g}m"
 
 
 def _counter_value(source: dict, *names: str) -> int:
@@ -130,6 +154,8 @@ async def track_post(conn, session: aiohttp.ClientSession, post_id: int) -> None
             continue
 
         wait = row["published_at"] + minute * 60 - time.time()
+        if wait < -MAX_CHECKPOINT_LAG_SECONDS:
+            continue
         if wait > 0:
             await asyncio.sleep(wait)
 
@@ -138,10 +164,10 @@ async def track_post(conn, session: aiohttp.ClientSession, post_id: int) -> None
             metric = build_metric(conn, post_id, raw, minute, int(time.time()))
             insert_metric(conn, metric)
             print(
-                f'[{post_id}] +{minute:>4}m | {raw["views"]:>6} views | '
+                f'[{post_id}] {checkpoint_label(minute):>5} | {raw["views"]:>6} views | '
                 f'{metric["velocity_5m"]:>7.1f} v/m | Δ5m {metric["views_last_5m"]:>5} | '
                 f'accel {metric["acceleration"] if metric["acceleration"] is not None else 0:>7.1f} | '
                 f'ER {metric["engagement_rate"]:.2%}'
             )
         except Exception as exc:
-            print(f'[ERR] {post_id} +{minute}m: {exc}')
+            print(f'[ERR] {post_id} {checkpoint_label(minute)}: {exc}')

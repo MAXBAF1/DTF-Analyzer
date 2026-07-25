@@ -157,7 +157,7 @@ def insert_metric(conn: sqlite3.Connection, metric: dict) -> None:
 def active_post_ids(
     conn: sqlite3.Connection,
     now: int,
-    checkpoints: Iterable[int],
+    checkpoints: Iterable[float],
     max_track_age_minutes: int | None = None,
 ) -> list[int]:
     max_age = max(checkpoints) * 60
