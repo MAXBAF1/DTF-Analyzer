@@ -1,16 +1,26 @@
 CREATE TABLE posts (
     id INTEGER PRIMARY KEY,
-    title TEXT,
-    published_at INTEGER,
-    author TEXT
+    title TEXT NOT NULL,
+    published_at INTEGER NOT NULL,
+    author TEXT DEFAULT '',
+    first_seen_at INTEGER NOT NULL,
+    last_feed_position INTEGER,
+    url TEXT DEFAULT ''
 );
 
 CREATE TABLE metrics (
-    post_id INTEGER,
-    ts INTEGER,              -- время замера
-    minutes_since_publish REAL,
-    views INTEGER,
-    likes INTEGER,
-    comments INTEGER,
-    PRIMARY KEY (post_id, ts)
+    post_id INTEGER NOT NULL,
+    ts INTEGER NOT NULL,
+    minutes_since_publish REAL NOT NULL,
+    views INTEGER NOT NULL,
+    likes INTEGER NOT NULL,
+    comments INTEGER NOT NULL,
+    feed_position INTEGER,
+    views_per_minute REAL,
+    views_last_5m INTEGER,
+    velocity_5m REAL,
+    acceleration REAL,
+    engagement_rate REAL,
+    PRIMARY KEY (post_id, ts),
+    FOREIGN KEY (post_id) REFERENCES posts(id)
 );
